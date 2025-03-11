@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Clock, Video, Globe, ChevronDown, CheckCircle, X } from 'lucide-react';
+import calendarService from '../services/calendarService'; // Import calendar service
 
 const BookingForm = () => {
   const navigate = useNavigate();
@@ -13,6 +14,9 @@ const BookingForm = () => {
     notes: ''
   });
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [appointmentId, setAppointmentId] = useState(null);
 
   const formatDate = (dateString) => {
     if (!dateString) return '';
@@ -43,19 +47,60 @@ const BookingForm = () => {
     navigate(-1);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const finalBookingData = {
-      ...formData,
-      service: bookingDetails?.selectedService,
-      date: bookingDetails?.selectedDate,
-      time: bookingDetails?.selectedTime,
-      extensionName: bookingDetails?.extensionName
-    };
+    setIsSubmitting(true);
+    setError('');
     
-    console.log('Final booking data:', finalBookingData);
-    // Show success modal instead of navigating
-    setShowSuccessModal(true);
+    try {
+      // Extract first and last name from the full name
+      const nameParts = formData.name.trim().split(' ');
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      
+      // Format date from ISO string to Date object
+      const appointmentDate = new Date(bookingDetails?.selectedDate);
+      
+      // Create the complete appointment data
+      const completeAppointmentData = {
+        // Appointment details from previous page
+        service: bookingDetails?.selectedService?.name || bookingDetails?.selectedService,
+        serviceId: bookingDetails?.selectedService?.id || 'default-service',
+        duration: bookingDetails?.selectedService?.durationMinutes || 30,
+        durationDisplay: bookingDetails?.selectedService?.duration || '30 min',
+        date: appointmentDate,
+        time: bookingDetails?.selectedTime,
+        timeZone: bookingDetails?.timeZone || 'Europe/Paris',
+        hostId: bookingDetails?.hostId || 'host-1',
+        extensionName: bookingDetails?.extensionName,
+        
+        // Client details from form
+        clientName: formData.name,
+        clientFirstName: firstName,
+        clientLastName: lastName,
+        clientEmail: formData.email,
+        notes: formData.notes,
+        
+        // Status and timestamps
+        status: 'confirmed',
+        createdAt: new Date()
+      };
+      
+      // Save to Firebase
+      const savedAppointment = await calendarService.saveAppointment(completeAppointmentData);
+      
+      console.log('Appointment saved successfully:', savedAppointment);
+      setAppointmentId(savedAppointment.id);
+      
+      // Show success modal
+      setShowSuccessModal(true);
+    } catch (error) {
+      console.error('Error saving appointment:', error);
+      setError(error.message || 'There was an error saving your appointment. Please try again.');
+      alert('There was an error saving your appointment. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (!bookingDetails) {
@@ -74,7 +119,7 @@ const BookingForm = () => {
           />
           <div className="text-base font-medium text-gray-500 mb-1">@</div>
           <h1 className="text-2xl font-semibold text-gray-900 mb-3">
-            {bookingDetails?.selectedService || 'Demo call'}
+            {bookingDetails?.selectedService?.name || bookingDetails?.selectedService || 'Demo call'}
           </h1>
           <p className="text-sm text-gray-500 leading-relaxed mb-6">
             Lorem ipsum dolor sit amet cons ectetur. Turpis gravida eget felis senectus eleifend.
@@ -83,7 +128,7 @@ const BookingForm = () => {
           <div className="flex flex-col gap-3 mb-6">
             <div className="flex items-center gap-2 text-gray-500 text-sm">
               <Clock size={20} className="text-gray-400" />
-              <span>{bookingDetails?.selectedTime || '15m'}</span>
+              <span>{bookingDetails?.selectedService?.duration || bookingDetails?.selectedTime || '15m'}</span>
             </div>
             <div className="flex items-center gap-2 text-gray-500 text-sm">
               <Video size={20} className="text-gray-400" />
@@ -91,7 +136,7 @@ const BookingForm = () => {
             </div>
             <div className="flex items-center gap-2 text-gray-500 text-sm">
               <Globe size={20} className="text-gray-400" />
-              <span>Europe/Paris</span>
+              <span>{bookingDetails?.timeZone || 'Europe/Paris'}</span>
               <ChevronDown size={16} className="text-gray-400" />
             </div>
           </div>
@@ -106,7 +151,7 @@ const BookingForm = () => {
               <span className="font-medium text-gray-700">Time:</span> {bookingDetails?.selectedTime}
             </p>
             <p className="text-sm text-gray-500">
-              <span className="font-medium text-gray-700">Service:</span> {bookingDetails?.selectedService}
+              <span className="font-medium text-gray-700">Service:</span> {bookingDetails?.selectedService?.name || bookingDetails?.selectedService}
             </p>
           </div>
 
@@ -125,6 +170,12 @@ const BookingForm = () => {
 
         {/* Form Section */}
         <form onSubmit={handleSubmit} className="flex-1 p-8 bg-white">
+          {error && (
+            <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">
+              {error}
+            </div>
+          )}
+          
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Your name <span className="text-red-500">*</span>
@@ -180,14 +231,16 @@ const BookingForm = () => {
               type="button" 
               onClick={handleBack}
               className="px-5 py-2.5 rounded-md text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors"
+              disabled={isSubmitting}
             >
               Back
             </button>
             <button 
               type="submit"
-              className="px-5 py-2.5 rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 transition-colors"
+              disabled={isSubmitting}
+              className={`px-5 py-2.5 rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 transition-colors ${isSubmitting ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
-              Confirm
+              {isSubmitting ? 'Processing...' : 'Confirm'}
             </button>
           </div>
         </form>
@@ -221,7 +274,7 @@ const BookingForm = () => {
                   <span className="font-medium">Name:</span> {formData.name}
                 </p>
                 <p className="text-sm text-gray-600">
-                  <span className="font-medium">Service:</span> {bookingDetails?.selectedService}
+                  <span className="font-medium">Service:</span> {bookingDetails?.selectedService?.name || bookingDetails?.selectedService}
                 </p>
                 <p className="text-sm text-gray-600">
                   <span className="font-medium">Date:</span> {formatDate(bookingDetails?.selectedDate)}

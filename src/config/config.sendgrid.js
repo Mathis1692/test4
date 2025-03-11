@@ -1,8 +1,8 @@
-const sgMail = require('@sendgrid/mail');
-require('dotenv').config();
+import sgMail from '@sendgrid/mail';
+import dotenv from 'dotenv';
 
-// Set your API key from environment variables for security
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// Remove this if dotenv is already configured in server.js
+dotenv.config();
 
 // Create reusable email service
 const emailService = {
@@ -10,7 +10,7 @@ const emailService = {
   sendEmail: async (to, subject, text, html) => {
     const msg = {
       to,
-      from: process.env.FROM_EMAIL, // Your verified sender email
+      from: process.env.FROM_EMAIL, 
       subject,
       text,
       html,
@@ -50,4 +50,4 @@ const emailService = {
   }
 };
 
-module.exports = emailService;
+export default emailService;

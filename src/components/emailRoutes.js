@@ -1,24 +1,31 @@
 import express from 'express';
 import sgMail from '@sendgrid/mail';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 const router = express.Router();
 
-// Set SendGrid API Key directly in this file for now
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// Don't set the API key immediately - we'll do this later
+// when we actually have access to the environment variables
 
-// Route to send welcome email - removed authentication for now
+// Route to send welcome email
 router.post('/welcome', async (req, res) => {
   try {
+    // Set API key right before using it to ensure environment variables are loaded
+    if (process.env.SENDGRID_API_KEY) {
+      sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    } else {
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Email service not configured - API key missing' 
+      });
+    }
+    
     const { email, extension } = req.body;
     
     if (!email || !extension) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
     
-    // Create email content directly (no template for now)
+    // Create email content
     const msg = {
       to: email,
       from: process.env.FROM_EMAIL || 'your-verified@email.com',
@@ -34,7 +41,7 @@ router.post('/welcome', async (req, res) => {
       `
     };
     
-    // Send email directly with sgMail
+    // Send email
     const response = await sgMail.send(msg);
     console.log('Email sent successfully');
     
@@ -42,7 +49,6 @@ router.post('/welcome', async (req, res) => {
   } catch (error) {
     console.error('Email Error:', error);
     
-    // Log more details if available
     if (error.response) {
       console.error(error.response.body);
     }
@@ -51,9 +57,19 @@ router.post('/welcome', async (req, res) => {
   }
 });
 
-// Keep your contact route if needed
+// Contact route
 router.post('/contact', async (req, res) => {
   try {
+    // Set API key right before using it to ensure environment variables are loaded
+    if (process.env.SENDGRID_API_KEY) {
+      sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    } else {
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Email service not configured - API key missing' 
+      });
+    }
+    
     const { name, email, message } = req.body;
     
     if (!name || !email || !message) {
@@ -66,7 +82,7 @@ router.post('/contact', async (req, res) => {
                   <p><strong>Email:</strong> ${email}</p>
                   <p><strong>Message:</strong> ${message}</p>`;
     
-    // Send email directly with sgMail
+    // Send email
     const msg = {
       to: process.env.ADMIN_EMAIL || 'your-admin@email.com',
       from: process.env.FROM_EMAIL || 'your-verified@email.com',
@@ -77,7 +93,6 @@ router.post('/contact', async (req, res) => {
     
     await sgMail.send(msg);
     
-    // No database logging for now
     console.log('Contact email sent successfully');
     
     res.status(200).json({ success: true, message: 'Email sent successfully' });

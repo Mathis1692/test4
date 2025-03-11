@@ -1,65 +1,82 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { Clock, Video, ChevronLeft, ChevronRight, Globe, Calendar as CalendarIcon } from 'lucide-react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { db } from '../config/config.firebase';
+import { doc, getDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
 
 // Customer profile configuration
 const CUSTOMER_DEFAULTS = {
   defaultTimeZone: "Europe/Paris",
 };
 
-// Service options
-const SERVICE_OPTIONS = [
-  {
-    id: "quick-call",
-    name: "Quick Call",
-    duration: 15,
-    durationMinutes: 15,
-    description: "Suited for people seeking strategic advice",
-    icon: "clock"
-  },
-  {
-    id: "consultation",
-    name: "Consultation",
-    duration: 30,
-    durationMinutes: 30,
-    description: "Ideal to explore any useful subject",
-    icon: "video",
-    default: true
-  },
-  {
-    id: "mentoring",
-    name: "5 Mentoring Sessions",
-    duration: "5 sessions x 30 min",
-    durationMinutes: 30,
-    description: "Unique opportunity to learn from a mentor experience, to take your objectives to the skies!",
-    icon: "calendar"
-  }
-];
-
 const CalendarPage = () => {
+  const { username } = useParams();
   const navigate = useNavigate();
-  const location = useLocation();
-  
-  // Company and host info
-  const companyName = "CIRQLE";
-  const meetingType = "Zoom";
-  
-  const { extensionName } = location.state || {
-    extensionName: companyName.toLowerCase().replace(/\s+/g, '-')
-  };
   
   // State management
-  const [selectedService, setSelectedService] = useState(
-    SERVICE_OPTIONS.find(service => service.default) || SERVICE_OPTIONS[0]
-  );
+  const [userId, setUserId] = useState(null);
+  const [userDetails, setUserDetails] = useState(null);
+  const [calendarSettings, setCalendarSettings] = useState(null);
+  const [selectedService, setSelectedService] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
   const [selectedTime, setSelectedTime] = useState(null);
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [showTimeSlots, setShowTimeSlots] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [showTimeZoneDropdown, setShowTimeZoneDropdown] = useState(false);
   const [currentStep, setCurrentStep] = useState(1); // 1: Service, 2: Date, 3: Time
   const [timeZone, setTimeZone] = useState(CUSTOMER_DEFAULTS.defaultTimeZone);
+  const [timeSlots, setTimeSlots] = useState([]); // Available time slots
+  const [bookedAppointments, setBookedAppointments] = useState([]); // Booked slots
+
+  // Find user by username and fetch their calendar settings
+  useEffect(() => {
+    const fetchUserAndSettings = async () => {
+      try {
+        setIsLoading(true);
+        
+        // Find user by username
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('username', '==', username));
+        const querySnapshot = await getDocs(q);
+        
+        if (querySnapshot.empty) {
+          console.error('User not found');
+          setIsLoading(false);
+          return;
+        }
+        
+        // Get first user document
+        const userDoc = querySnapshot.docs[0];
+        const userData = userDoc.data();
+        
+        setUserId(userDoc.id);
+        setUserDetails({
+          displayName: userData.displayName || username,
+          email: userData.email || ''
+        });
+        
+        // Get calendar settings
+        if (userData.calendarSettings) {
+          setCalendarSettings(userData.calendarSettings);
+          
+          // Set default service if available
+          if (userData.calendarSettings.services && userData.calendarSettings.services.length > 0) {
+            setSelectedService(userData.calendarSettings.services[0]);
+          }
+        } else {
+          console.error('Calendar settings not found');
+        }
+      } catch (error) {
+        console.error('Error fetching user data:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    if (username) {
+      fetchUserAndSettings();
+    }
+  }, [username]);
 
   // Format month and year
   const formatMonth = (date) => {
@@ -167,7 +184,8 @@ const CalendarPage = () => {
     newDate.setMonth(currentMonth.getMonth() + direction);
     setCurrentMonth(newDate);
     
-    // Simulating network request for available slots
+    // We could fetch availability for the entire month here, but for simplicity
+    // we'll just remove the loading state after a brief delay
     setTimeout(() => {
       setIsLoading(false);
     }, 300);
@@ -180,26 +198,77 @@ const CalendarPage = () => {
   };
 
   // Handle date selection
-  const handleDateSelect = (date) => {
-    setSelectedDate(date);
+  const handleDateSelect = async (date) => {
+    if (!date.isCurrentMonth) {
+      // If selecting a day from previous/next month, change the current month view
+      setCurrentMonth(date.date);
+      return;
+    }
+
+    setSelectedDate(date.date);
     setSelectedTime(null);
     setIsLoading(true);
     
-    // Then show time slots after a brief delay (simulating API call)
-    setTimeout(() => {
-      setShowTimeSlots(true);
-      setIsLoading(false);
+    try {
+      // Get day of week from the date
+      const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const dayOfWeek = days[date.date.getDay()];
+      
+      // Check if this day is enabled in calendar settings
+      if (!calendarSettings.availability.weekdays[dayOfWeek].enabled) {
+        setTimeSlots([]);
+        setShowTimeSlots(false);
+        setIsLoading(false);
+        return;
+      }
+      
+      // Get available slots from calendar settings
+      const availableSlots = [...calendarSettings.availability.weekdays[dayOfWeek].slots];
+      
+      // Get booked slots from Firestore
+      const startOfDay = new Date(date.date);
+      startOfDay.setHours(0, 0, 0, 0);
+      
+      const endOfDay = new Date(date.date);
+      endOfDay.setHours(23, 59, 59, 999);
+      
+      const bookingsQuery = query(
+        collection(db, 'bookings'),
+        where('userId', '==', userId),
+        where('date', '>=', startOfDay),
+        where('date', '<=', endOfDay)
+      );
+      
+      const bookingsSnapshot = await getDocs(bookingsQuery);
+      const bookings = [];
+      
+      bookingsSnapshot.forEach(doc => {
+        bookings.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      setBookedAppointments(bookings);
+      
+      // Filter out already booked time slots
+      const bookedTimes = bookings.map(booking => booking.timeSlot || booking.time);
+      const availableTimeSlots = availableSlots.filter(slot => !bookedTimes.includes(slot));
+      
+      setTimeSlots(availableTimeSlots);
       setCurrentStep(3);
-    }, 400);
+    } catch (error) {
+      console.error('Error getting time slots:', error);
+      setTimeSlots([]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Handle time selection
   const handleTimeSelect = (time) => {
     setSelectedTime(time);
   };
-
-  // Available time slots - could be dynamic based on selected service
-  const timeSlots = ["10:00", "11:00", "14:00", "15:00", "17:00", "17:30"];
 
   // Weekday headers - Monday first
   const weekdays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
@@ -213,21 +282,38 @@ const CalendarPage = () => {
     weeks.push(calendarDays.slice(i, i + 7));
   }
 
-  // Handle confirmation - navigate to BookingForm.jsx
-  const handleConfirm = () => {
-    if (!selectedTime) return;
+  // Handle confirmation - Create a booking before navigating to form
+  const handleConfirm = async () => {
+    if (!selectedService || !selectedDate || !selectedTime) return;
     
-    navigate(`/booking-form/${extensionName || 'default'}`, { 
-      state: {
-        service: selectedService.name,
-        duration: selectedService.durationMinutes || selectedService.duration,
-        durationDisplay: selectedService.duration,
-        extensionName,
-        date: selectedDate.toISOString(),
-        time: selectedTime,
-        timeZone: timeZone
-      }
-    });
+    try {
+      setIsLoading(true);
+      
+      // Create booking timestamp
+      const bookingDate = new Date(selectedDate);
+      const [hours, minutes] = selectedTime.split(':').map(Number);
+      bookingDate.setHours(hours, minutes, 0, 0);
+      
+      // Navigate to the booking form with all data
+      navigate(`/booking-form/${username}`, {
+        state: {
+          userId: userId,
+          serviceId: selectedService.id,
+          serviceName: selectedService.name,
+          serviceDuration: selectedService.duration,
+          servicePrice: selectedService.price,
+          date: bookingDate,
+          dateString: bookingDate.toISOString().split('T')[0],
+          timeSlot: selectedTime,
+          timezone: timeZone
+        }
+      });
+    } catch (error) {
+      console.error('Error preparing booking:', error);
+      alert('There was an error creating your booking. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Toggle time zone dropdown
@@ -260,17 +346,9 @@ const CalendarPage = () => {
   };
 
   // Get the icon component based on service icon name
-  const getServiceIcon = (iconName) => {
-    switch(iconName) {
-      case 'clock':
-        return <Clock size={20} className="text-blue-500" />;
-      case 'video':
-        return <Video size={20} className="text-blue-500" />;
-      case 'calendar':
-        return <CalendarIcon size={20} className="text-blue-500" />;
-      default:
-        return <Clock size={20} className="text-blue-500" />;
-    }
+  const getServiceIcon = (service) => {
+    // Use Clock as default icon
+    return <Clock size={20} className="text-blue-500" />;
   };
 
   // Render progress steps
@@ -304,12 +382,31 @@ const CalendarPage = () => {
     );
   };
 
+  if (isLoading && !calendarSettings) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  if (!calendarSettings) {
+    return (
+      <div className="max-w-xl mx-auto mt-10 p-6 bg-white rounded-lg shadow-md">
+        <h1 className="text-2xl font-bold text-center text-red-600">Calendar Not Found</h1>
+        <p className="mt-4 text-center text-gray-600">
+          Sorry, this booking page doesn't exist or has been deactivated.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-8xl mx-auto bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
       <div className="p-5 border-b border-gray-100 flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-800">Share your booking page</h1>
+        <h1 className="text-2xl font-bold text-gray-800">{calendarSettings.pageTitle || `Book with ${userDetails.displayName}`}</h1>
         
-        {/* Time Zone Selector - Moved to top right */}
+        {/* Time Zone Selector - Top right */}
         <div className="relative">
           <button 
             className="flex items-center justify-between border border-gray-300 rounded py-1.5 px-3
@@ -360,15 +457,19 @@ const CalendarPage = () => {
                   <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
                 </svg>
               </div>
-              <span className="text-lg text-gray-700 font-medium">{companyName}</span>
+              <span className="text-lg text-gray-700 font-medium">
+                {userDetails.displayName}'s Calendar
+              </span>
             </div>
             
             <div className="mb-5">
-              <div className="w-16 h-16 rounded-full overflow-hidden bg-gray-200 mb-3">
-                {/* Profile Image */}
-                <div className="w-full h-full bg-gray-300"></div>
+              <div className="w-16 h-16 rounded-full overflow-hidden bg-gray-200 mb-3 flex items-center justify-center">
+                {/* Profile Image or Initials */}
+                <span className="text-lg font-bold text-gray-500">
+                  {userDetails.displayName?.charAt(0) || '?'}
+                </span>
               </div>
-              <h3 className="text-base text-gray-600">{extensionName}</h3>
+              <p className="text-sm text-gray-600">{calendarSettings.welcomeMessage}</p>
             </div>
           </div>
           
@@ -376,12 +477,12 @@ const CalendarPage = () => {
           
           {/* Service Options */}
           <div className="space-y-3 overflow-y-auto max-h-[400px]">
-            {SERVICE_OPTIONS.map((service) => (
+            {calendarSettings.services.map((service) => (
               <button
                 key={service.id}
                 className={`
                   w-full p-3 rounded-lg border transition-all duration-200 text-left
-                  ${selectedService.id === service.id 
+                  ${selectedService?.id === service.id 
                     ? 'bg-blue-50 border-blue-500 ring-2 ring-blue-200' 
                     : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50'
                   }
@@ -390,14 +491,20 @@ const CalendarPage = () => {
               >
                 <div className="flex items-start">
                   <div className="mr-3 mt-0.5">
-                    {getServiceIcon(service.icon)}
+                    {getServiceIcon(service)}
                   </div>
                   <div>
                     <h3 className="font-medium text-gray-800">{service.name}</h3>
                     <p className="text-sm text-gray-500 mt-1">{service.description}</p>
                     <div className="flex items-center mt-2 text-sm text-gray-600">
                       <Clock size={14} className="mr-1" />
-                      <span>{typeof service.duration === 'string' ? service.duration : `${service.duration} min`}</span>
+                      <span>{service.duration} min</span>
+                      {service.price > 0 && (
+                        <>
+                          <span className="mx-2">•</span>
+                          <span>${service.price}</span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -411,23 +518,28 @@ const CalendarPage = () => {
           <h2 className="text-lg font-bold text-gray-800 mb-3">Select a Date</h2>
           
           {/* Selected Service Summary */}
-          <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-100">
-            <div className="flex items-center">
-              <div className="mr-3">
-                {getServiceIcon(selectedService.icon)}
-              </div>
-              <div>
-                <h3 className="font-medium text-gray-800">{selectedService.name}</h3>
-                <div className="flex items-center text-sm text-gray-600 mt-1">
-                  <Clock size={14} className="mr-1" />
-                  <span>{typeof selectedService.duration === 'string' ? selectedService.duration : `${selectedService.duration} min`}</span>
-                  <span className="mx-2">•</span>
-                  <Video size={14} className="mr-1" />
-                  <span>{meetingType}</span>
+          {selectedService && (
+            <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-100">
+              <div className="flex items-center">
+                <div className="mr-3">
+                  {getServiceIcon(selectedService)}
+                </div>
+                <div>
+                  <h3 className="font-medium text-gray-800">{selectedService.name}</h3>
+                  <div className="flex items-center text-sm text-gray-600 mt-1">
+                    <Clock size={14} className="mr-1" />
+                    <span>{selectedService.duration} min</span>
+                    {selectedService.price > 0 && (
+                      <>
+                        <span className="mx-2">•</span>
+                        <span>${selectedService.price}</span>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          )}
           
           {/* Month Navigation */}
           <div className="flex justify-between items-center mb-2">
@@ -465,26 +577,36 @@ const CalendarPage = () => {
             <div className={`space-y-0.5 ${isLoading ? 'opacity-60' : 'opacity-100'} transition-opacity duration-200`}>
               {weeks.map((week, weekIndex) => (
                 <div key={weekIndex} className="grid grid-cols-7 gap-1">
-                  {week.map((day, dayIndex) => (
-                    <button
-                      key={`${weekIndex}-${dayIndex}`}
-                      className={`
-                        h-9 w-9 mx-auto flex items-center justify-center rounded-full text-sm
-                        ${!day.isCurrentMonth ? 'text-gray-300' : 'text-gray-800'}
-                        ${day.isSelected ? 'bg-blue-500 text-white' : 'hover:bg-gray-100'}
-                        ${day.isToday && !day.isSelected ? 'border border-blue-500' : ''}
-                        focus:outline-none focus:ring-2 focus:ring-blue-400
-                        transition-colors duration-200
-                      `}
-                      onClick={() => handleDateSelect(day.date)}
-                      disabled={!day.isCurrentMonth || isLoading}
-                      aria-label={`${day.date.toLocaleDateString()}, ${day.isSelected ? 'selected' : ''}`}
-                      aria-current={day.isToday ? 'date' : undefined}
-                      aria-selected={day.isSelected}
-                    >
-                      {day.dayOfMonth}
-                    </button>
-                  ))}
+                  {week.map((day, dayIndex) => {
+                    // Get day of week
+                    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                    const dayOfWeek = days[day.date.getDay()];
+                    
+                    // Check if this day is enabled in calendar settings
+                    const isDayEnabled = day.isCurrentMonth && 
+                      calendarSettings.availability.weekdays[dayOfWeek]?.enabled;
+                    
+                    return (
+                      <button
+                        key={`${weekIndex}-${dayIndex}`}
+                        className={`
+                          h-9 w-9 mx-auto flex items-center justify-center rounded-full text-sm
+                          ${!day.isCurrentMonth ? 'text-gray-300' : 'text-gray-800'}
+                          ${day.isSelected ? 'bg-blue-500 text-white' : (isDayEnabled ? 'hover:bg-gray-100' : 'opacity-50 cursor-not-allowed')}
+                          ${day.isToday && !day.isSelected ? 'border border-blue-500' : ''}
+                          focus:outline-none focus:ring-2 focus:ring-blue-400
+                          transition-colors duration-200
+                        `}
+                        onClick={() => handleDateSelect(day)}
+                        disabled={!isDayEnabled || isLoading}
+                        aria-label={`${day.date.toLocaleDateString()}, ${day.isSelected ? 'selected' : ''}`}
+                        aria-current={day.isToday ? 'date' : undefined}
+                        aria-selected={day.isSelected}
+                      >
+                        {day.dayOfMonth}
+                      </button>
+                    );
+                  })}
                 </div>
               ))}
             </div>
@@ -500,26 +622,32 @@ const CalendarPage = () => {
               </h2>
               
               {/* Time Slots in a scrollable container */}
-              <div className="overflow-y-auto mb-2 flex-grow max-h-[200px]">
+              <div className="overflow-y-auto mb-2 flex-grow max-h-[300px]">
                 <div className={`grid grid-cols-1 gap-2 ${isLoading ? 'opacity-60' : 'opacity-100'} transition-opacity duration-200`}>
-                  {timeSlots.map(time => (
-                    <button
-                      key={time}
-                      className={`
-                        py-2 px-3 border rounded-lg text-center transition-all duration-200
-                        ${selectedTime === time 
-                          ? 'bg-blue-500 text-white border-blue-500 shadow-sm' 
-                          : 'border-gray-300 text-blue-500 hover:border-blue-300 hover:bg-blue-50'
-                        }
-                        focus:outline-none focus:ring-2 focus:ring-blue-500
-                      `}
-                      onClick={() => handleTimeSelect(time)}
-                      disabled={isLoading}
-                      aria-selected={selectedTime === time}
-                    >
-                      {time}
-                    </button>
-                  ))}
+                  {timeSlots.length > 0 ? (
+                    timeSlots.map(time => (
+                      <button
+                        key={time}
+                        className={`
+                          py-2 px-3 border rounded-lg text-center transition-all duration-200
+                          ${selectedTime === time 
+                            ? 'bg-blue-500 text-white border-blue-500 shadow-sm' 
+                            : 'border-gray-300 text-blue-500 hover:border-blue-300 hover:bg-blue-50'
+                          }
+                          focus:outline-none focus:ring-2 focus:ring-blue-500
+                        `}
+                        onClick={() => handleTimeSelect(time)}
+                        disabled={isLoading}
+                        aria-selected={selectedTime === time}
+                      >
+                        {time}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="text-center py-6 text-gray-500">
+                      No available time slots for this date. Please select another date.
+                    </div>
+                  )}
                 </div>
               </div>
               
@@ -529,7 +657,7 @@ const CalendarPage = () => {
                   <h3 className="font-medium text-gray-800 mb-1">Your selected appointment:</h3>
                   <div className="text-xs text-gray-700 space-y-0.5">
                     <p><span className="font-medium">Service:</span> {selectedService.name}</p>
-                    <p><span className="font-medium">Duration:</span> {typeof selectedService.duration === 'string' ? selectedService.duration : `${selectedService.duration} min`}</p>
+                    <p><span className="font-medium">Duration:</span> {selectedService.duration} min</p>
                     <p><span className="font-medium">Date:</span> {formatFullDate(selectedDate)}</p>
                     <p><span className="font-medium">Time:</span> {selectedTime}</p>
                     <p><span className="font-medium">Zone:</span> {timeZoneDisplayNames[timeZone] || timeZone}</p>
@@ -547,12 +675,18 @@ const CalendarPage = () => {
                       : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                     }
                     focus:outline-none focus:ring-2 focus:ring-blue-500
-                    sticky bottom-0
                   `}
                   onClick={handleConfirm}
-                  disabled={!selectedTime}
+                  disabled={!selectedTime || isLoading}
                 >
-                  Confirm
+                  {isLoading ? (
+                    <div className="flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white mr-2"></div>
+                      Processing...
+                    </div>
+                  ) : (
+                    'Continue'
+                  )}
                 </button>
               </div>
             </div>
