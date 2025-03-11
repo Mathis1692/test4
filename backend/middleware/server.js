@@ -3,13 +3,14 @@ import path from 'path';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import emailRoutes from './routes/emailRoutes.js';
+import emailRoutes from '../routes/emailRoutes.js';
 
-// Load environment variables
-dotenv.config();
-
+// Set up __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Load environment variables
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -22,14 +23,14 @@ app.use(express.json());
 app.use('/api/email', emailRoutes);
 
 // For Vite, static files are in the dist directory
-app.use(express.static(path.join(__dirname, '../dist')));
+app.use(express.static(path.join(__dirname, '../../dist')));
 
 // Handle requests for static assets in the dist directory
-app.use('/assets', express.static(path.join(__dirname, '../dist/assets')));
+app.use('/assets', express.static(path.join(__dirname, '../../dist/assets')));
 
 // Catch-all route for client-side routing - this should come AFTER your API routes
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
+  res.sendFile(path.join(__dirname, '../../dist/index.html'));
 });
 
 app.listen(port, () => {

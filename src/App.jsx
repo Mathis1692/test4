@@ -72,19 +72,32 @@ const App = () => {
     return true;
   };
 
-  // Mock email sending function (replace with your preferred email service)
+  // Real email sending function using your backend SendGrid integration
   const sendConfirmationEmail = async (recipientEmail, username) => {
     try {
-      // This is a mock implementation - in a real app, you would:
-      // 1. Make an API call to your backend service
-      // 2. The backend would send the email using a service like SendGrid, Mailgun, etc.
       console.log(`Sending confirmation email to ${recipientEmail} for username ${username}`);
       
-      // Simulate API call delay
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Make API call to your backend
+      const response = await fetch('/api/email/welcome', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: recipientEmail,
+          extension: username
+        }),
+      });
       
-      // In a real implementation, this would return a response from your email service
-      return true;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to send email');
+      }
+      
+      const data = await response.json();
+      console.log('Email API response:', data);
+      
+      return data.success;
     } catch (error) {
       console.error('Error sending confirmation email:', error);
       throw error;
@@ -95,7 +108,11 @@ const App = () => {
   const handleFormSubmission = async () => {
     try {
       // Send confirmation email
-      await sendConfirmationEmail(formData.email, formData.extension);
+      const emailSuccess = await sendConfirmationEmail(formData.email, formData.extension);
+      
+      if (!emailSuccess) {
+        throw new Error("Email could not be sent");
+      }
       
       // After successful email sending, navigate to personalized URL
       setTimeout(() => {
